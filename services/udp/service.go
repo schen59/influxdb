@@ -132,23 +132,46 @@ func (s *Service) writer() {
 	for {
 		select {
 		case batch := <-s.batcher.Out():
-			if err := s.PointsWriter.WritePoints(&cluster.WritePointsRequest{
-				Database:         s.config.Database,
-				RetentionPolicy:  s.config.RetentionPolicy,
-				ConsistencyLevel: cluster.ConsistencyLevelOne,
-				Points:           batch,
-			}); err == nil {
-				s.statMap.Add(statBatchesTrasmitted, 1)
-				s.statMap.Add(statPointsTransmitted, int64(len(batch)))
-			} else {
-				s.Logger.Printf("failed to write point batch to database %q: %s", s.config.Database, err)
-				s.statMap.Add(statBatchesTransmitFail, 1)
+			for database, points := range s.dispatch(batch) {
+				if err := s.PointsWriter.WritePoints(&cluster.WritePointsRequest{
+					Database:         database,
+					RetentionPolicy:  s.config.RetentionPolicy,
+					ConsistencyLevel: cluster.ConsistencyLevelOne,
+					Points:           points,
+				}); err == nil {
+					s.statMap.Add(statBatchesTrasmitted, 1)
+					s.statMap.Add(statPointsTransmitted, int64(len(points)))
+				} else {
+					s.Logger.Printf("failed to write point batch to database %q: %s", database, err)
+					s.statMap.Add(statBatchesTransmitFail, 1)
+				}
 			}
 
 		case <-s.done:
 			return
 		}
 	}
+}
+
+func (s *Service) dispatch(points []models.Point) map[string][]models.Point {
+	dispatchedPoints := map[string][]models.Point{}
+	defaultDatabase := s.config.Database
+	dispatchedPoints[defaultDatabase] = []models.Point{}
+	if s.config.DatabaseRoutingTag == "" {
+		dispatchedPoints[defaultDatabase] = append(dispatchedPoints[defaultDatabase], points)
+		return dispatchedPoints
+	}
+	for _, point := range points {
+		if tag, ok := point.Tags()[s.config.DatabaseRoutingTag]; ok {
+			if _, existed := dispatchedPoints[tag]; !existed {
+				dispatchedPoints[tag] = []models.Point{}
+			}
+			dispatchedPoints[tag] = append(dispatchedPoints[tag], point)
+		} else {
+			dispatchedPoints[defaultDatabase] = append(dispatchedPoints[defaultDatabase], point)
+		}
+	}
+	return dispatchedPoints
 }
 
 func (s *Service) serve() {

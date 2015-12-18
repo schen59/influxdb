@@ -320,6 +320,7 @@ reporting-disabled = false
   enabled = false
   # bind-address = ""
   # database = "udp"
+  # database-routing-tag = ""
   # retention-policy = ""
 
   # These next lines control how batching works. You should have this enabled
